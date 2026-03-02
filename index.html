@@ -94,11 +94,22 @@ main {
 }
 
 #video { width:100%; height:100%; object-fit:cover; }
+#overlay.drawing ~ .cam-hud,
+#overlay.drawing ~ .cam-status { pointer-events:none; }
+.cam-wrap.cal-active #video { pointer-events:none; }
 #overlay {
-  position:absolute; inset:0;
+  position:absolute;
+  top:0; left:0;
+  width:100%; height:100%;
   pointer-events:none;
+  z-index:5;
 }
-#overlay.drawing { pointer-events:auto; touch-action:none; }
+#overlay.drawing {
+  pointer-events:auto;
+  touch-action:none;
+  background: rgba(0,0,0,0.15);
+  cursor:crosshair;
+}
 
 .cam-hud {
   position:absolute; top:10px; left:0; right:0;
@@ -467,7 +478,7 @@ tr:last-child td { border-bottom:none; }
         </div>
 
         <div class="cam-status" id="cam-status">
-          Tap Setup to calibrate, then capture an item
+          Tap the ruler icon (bottom right) to calibrate first
         </div>
 
         <!-- Results overlay -->
@@ -711,9 +722,9 @@ async function startCamera() {
 }
 
 function sizeOverlay() {
-  const v = document.getElementById("video");
+  const wrap = document.querySelector(".cam-wrap");
   const c = document.getElementById("overlay");
-  const rect = v.getBoundingClientRect();
+  const rect = wrap.getBoundingClientRect();
   c.width = rect.width;
   c.height = rect.height;
   c.style.width = rect.width + "px";
@@ -770,9 +781,10 @@ function initUI() {
     saveState();
   });
 
-  // Calibration overlay touch
+  // Calibration overlay touch - use BOTH touchstart and click for coverage
   const ov = document.getElementById("overlay");
-  ov.addEventListener("pointerdown", onCalTouch);
+  ov.addEventListener("touchstart", onCalTouch, {passive: false});
+  ov.addEventListener("click", onCalClick);
 
   // Export / Clear
   document.getElementById("btn-csv").addEventListener("click", exportCSV);
@@ -801,21 +813,32 @@ function toggleCalMode() {
   const shutter = document.getElementById("btn-capture");
   const status = document.getElementById("cam-status");
 
+  // Always re-size the overlay when entering cal mode
+  sizeOverlay();
+
+  const wrap = document.querySelector(".cam-wrap");
+
   if (S.calMode) {
+    wrap.classList.add("cal-active");
     ov.classList.add("drawing");
     btn.style.background = "var(--amber)";
     btn.style.color = "#000";
     shutter.classList.add("calibrate-mode");
-    status.textContent = "TAP two points on your reference object (" + S.refMm + "mm)";
+    status.textContent = "TAP point 1 on your reference object (" + S.refMm + "mm)";
+    status.style.color = "var(--amber)";
+    status.style.fontWeight = "600";
     clearOverlay();
   } else {
+    wrap.classList.remove("cal-active");
     ov.classList.remove("drawing");
     btn.style.background = "";
     btn.style.color = "";
     shutter.classList.remove("calibrate-mode");
+    status.style.color = "";
+    status.style.fontWeight = "";
     status.textContent = S.ppm > 0
       ? "Calibrated. Capture an item."
-      : "Tap Setup to calibrate.";
+      : "Tap ruler icon to calibrate.";
     clearOverlay();
   }
 }
@@ -823,14 +846,44 @@ function toggleCalMode() {
 function onCalTouch(e) {
   if (!S.calMode) return;
   e.preventDefault();
+  e.stopPropagation();
+
+  const touch = e.touches[0];
+  const ov = document.getElementById("overlay");
+  const rect = ov.getBoundingClientRect();
+  const x = touch.clientX - rect.left;
+  const y = touch.clientY - rect.top;
+
+  registerCalPoint(x, y, rect);
+}
+
+function onCalClick(e) {
+  if (!S.calMode) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  // Skip if this was already handled by touchstart (prevent double-fire)
+  if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
 
   const ov = document.getElementById("overlay");
   const rect = ov.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
 
+  registerCalPoint(x, y, rect);
+}
+
+function registerCalPoint(x, y, rect) {
   S.calPoints.push({x, y});
   drawCalPoints();
+
+  // Vibration feedback if available
+  if (navigator.vibrate) navigator.vibrate(30);
+
+  const status = document.getElementById("cam-status");
+  if (S.calPoints.length === 1) {
+    status.textContent = "Point 1 set. Now tap the OTHER end of the reference.";
+  }
 
   if (S.calPoints.length === 2) {
     // Compute pixels per mm
@@ -838,10 +891,12 @@ function onCalTouch(e) {
     const dy = S.calPoints[1].y - S.calPoints[0].y;
     const distPx = Math.sqrt(dx*dx + dy*dy);
 
-    // Scale factor: overlay coords may differ from video resolution
+    // Scale factor: overlay display size vs video native resolution
     const v = document.getElementById("video");
-    const scaleX = v.videoWidth / rect.width;
-    const scaleY = v.videoHeight / rect.height;
+    const ov = document.getElementById("overlay");
+    const ovRect = ov.getBoundingClientRect();
+    const scaleX = v.videoWidth / ovRect.width;
+    const scaleY = v.videoHeight / ovRect.height;
     const avgScale = (scaleX + scaleY) / 2;
 
     const distPxActual = distPx * avgScale;
