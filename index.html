@@ -135,6 +135,31 @@ main {
   pointer-events:none;
 }
 
+/* Frozen frame for tap-to-select */
+.select-overlay {
+  display:none;
+  position:absolute; inset:0; z-index:8;
+  cursor:crosshair;
+}
+.select-overlay.on { display:block; }
+.select-overlay canvas {
+  width:100%; height:100%; object-fit:cover;
+}
+.select-hint {
+  position:absolute; bottom:12px; left:0; right:0;
+  text-align:center;
+  font-size:14px; font-weight:600;
+  color:var(--amber);
+  text-shadow: 0 1px 6px rgba(0,0,0,0.9);
+  padding:0 20px;
+  pointer-events:none;
+  animation: pulse 1.5s ease infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity:1; }
+  50% { opacity:0.6; }
+}
+
 .cam-bar {
   flex-shrink:0;
   display:flex; align-items:center; justify-content:center;
@@ -481,6 +506,12 @@ tr:last-child td { border-bottom:none; }
           Tap the ruler icon (bottom right) to calibrate first
         </div>
 
+        <!-- Tap-to-select overlay (shown after capture) -->
+        <div class="select-overlay" id="select-overlay">
+          <canvas id="frozen-canvas"></canvas>
+          <div class="select-hint">TAP THE ITEM you want to measure</div>
+        </div>
+
         <!-- Results overlay -->
         <div class="results" id="results">
           <canvas class="results-img" id="results-canvas"></canvas>
@@ -662,6 +693,11 @@ const S = {
   measurements: [],  // saved records
   cvReady: false,
   lastResult: null,
+  // Tap-to-select state
+  frozenCanvas: null,   // captured frame data
+  selectMode: false,    // waiting for user to tap an item
+  allContours: null,    // detected contours from frozen frame
+  srcMat: null,         // source cv.Mat for measurement after tap
 };
 
 // ═══════════════════════════════════════════════════════
@@ -769,7 +805,10 @@ function initUI() {
   // Retake
   document.getElementById("btn-retake").addEventListener("click", () => {
     document.getElementById("results").classList.remove("on");
+    document.getElementById("select-overlay").classList.remove("on");
     S.lastResult = null;
+    S.selectMode = false;
+    S.allContours = null;
   });
 
   // Save
@@ -785,6 +824,11 @@ function initUI() {
   const ov = document.getElementById("overlay");
   ov.addEventListener("touchstart", onCalTouch, {passive: false});
   ov.addEventListener("click", onCalClick);
+
+  // Tap-to-select: user taps on the item they want measured
+  const selOv = document.getElementById("select-overlay");
+  selOv.addEventListener("touchstart", onSelectTouch, {passive: false});
+  selOv.addEventListener("click", onSelectClick);
 
   // Export / Clear
   document.getElementById("btn-csv").addEventListener("click", exportCSV);
@@ -984,7 +1028,7 @@ function updateHUD() {
 }
 
 // ═══════════════════════════════════════════════════════
-// CAPTURE & MEASURE
+// CAPTURE & MEASURE (tap-to-select flow)
 // ═══════════════════════════════════════════════════════
 
 function captureAndMeasure() {
@@ -996,27 +1040,55 @@ function captureAndMeasure() {
   const pctx = pc.getContext("2d", {willReadFrequently: true});
   pctx.drawImage(v, 0, 0);
 
-  document.getElementById("cam-status").textContent = "Processing...";
+  // Show frozen frame in select overlay
+  const fc = document.getElementById("frozen-canvas");
+  fc.width = v.videoWidth;
+  fc.height = v.videoHeight;
+  const fctx = fc.getContext("2d");
+  fctx.drawImage(pc, 0, 0);
 
-  // Use requestAnimationFrame to avoid blocking UI
-  requestAnimationFrame(() => {
-    try {
-      const result = measureFromCanvas(pc);
-      if (result.success) {
-        S.lastResult = result;
-        displayResults(result);
-      } else {
-        toast(result.error, true);
-        document.getElementById("cam-status").textContent = result.error;
+  // Find all contours FIRST
+  const contourData = findAllContours(pc);
+  if (!contourData) {
+    toast("No objects detected. Try better lighting.", true);
+    return;
+  }
+
+  // Draw all detected contour outlines on frozen frame so user can see them
+  const outlineColors = [
+    "rgba(74,158,255,0.5)", "rgba(34,197,94,0.5)", "rgba(251,191,36,0.5)",
+    "rgba(239,68,68,0.5)", "rgba(168,85,247,0.5)"
+  ];
+  const scaleX = fc.width / v.videoWidth;  // should be 1:1
+  const scaleY = fc.height / v.videoHeight;
+
+  for (let i = 0; i < contourData.contours.length; i++) {
+    const pts = contourData.contours[i];
+    fctx.beginPath();
+    fctx.strokeStyle = outlineColors[i % outlineColors.length];
+    fctx.lineWidth = 4;
+    if (pts.length > 0) {
+      fctx.moveTo(pts[0].x, pts[0].y);
+      for (let j = 1; j < pts.length; j++) {
+        fctx.lineTo(pts[j].x, pts[j].y);
       }
-    } catch(e) {
-      toast("Processing error: " + e.message, true);
-      document.getElementById("cam-status").textContent = "Error. Try again.";
+      fctx.closePath();
+      fctx.stroke();
     }
-  });
+  }
+
+  // Store state for when user taps
+  S.selectMode = true;
+  S.frozenCanvas = pc;
+  S.allContours = contourData;
+
+  // Show the select overlay
+  document.getElementById("select-overlay").classList.add("on");
+
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
-function measureFromCanvas(canvas) {
+function findAllContours(canvas) {
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
@@ -1024,85 +1096,212 @@ function measureFromCanvas(canvas) {
   const morph = new cv.Mat();
 
   try {
-    // Grayscale
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-    // Blur
     const ksize = new cv.Size(7, 7);
     cv.GaussianBlur(gray, blurred, ksize, 0);
-
-    // Adaptive threshold
     cv.adaptiveThreshold(blurred, thresh, 255,
       cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 10);
 
-    // Morphological cleanup
     const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
     cv.morphologyEx(thresh, morph, cv.MORPH_CLOSE, kernel, new cv.Point(-1,-1), 3);
     cv.morphologyEx(morph, morph, cv.MORPH_OPEN, kernel, new cv.Point(-1,-1), 2);
     kernel.delete();
 
-    // Find contours
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
     cv.findContours(morph, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    // Find largest contour above minimum area
-    const minAreaPx = 500 * (S.ppm * S.ppm); // 500 mm2 minimum
-    let bestIdx = -1;
-    let bestArea = 0;
+    const minAreaPx = 200 * (S.ppm * S.ppm); // lower threshold to catch more objects
+    const maxArea = src.rows * src.cols * 0.8;
+    const results = [];
 
     for (let i = 0; i < contours.size(); i++) {
-      const area = cv.contourArea(contours.get(i));
-      if (area > minAreaPx && area > bestArea) {
-        // Skip contours that are too large (>80% of image = probably background)
-        if (area > src.rows * src.cols * 0.8) continue;
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      if (area > minAreaPx && area < maxArea) {
+        // Extract contour points as JS array
+        const pts = [];
+        for (let j = 0; j < cnt.rows; j++) {
+          pts.push({ x: cnt.intAt(j, 0), y: cnt.intAt(j, 1) });
+        }
+        results.push(pts);
+      }
+    }
+
+    contours.delete(); hierarchy.delete();
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    return { contours: results };
+
+  } finally {
+    src.delete(); gray.delete();
+    blurred.delete(); thresh.delete(); morph.delete();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// TAP-TO-SELECT handlers
+// ═══════════════════════════════════════════════════════
+
+function onSelectTouch(e) {
+  if (!S.selectMode) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const touch = e.touches[0];
+  const el = document.getElementById("select-overlay");
+  const rect = el.getBoundingClientRect();
+  const x = touch.clientX - rect.left;
+  const y = touch.clientY - rect.top;
+  processSelection(x, y, rect);
+}
+
+function onSelectClick(e) {
+  if (!S.selectMode) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+  const el = document.getElementById("select-overlay");
+  const rect = el.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  processSelection(x, y, rect);
+}
+
+function processSelection(tapX, tapY, displayRect) {
+  if (!S.allContours || !S.frozenCanvas) return;
+
+  // Convert tap from display coords to video/canvas pixel coords
+  const fc = document.getElementById("frozen-canvas");
+  const scaleX = fc.width / displayRect.width;
+  const scaleY = fc.height / displayRect.height;
+  const px = tapX * scaleX;
+  const py = tapY * scaleY;
+
+  // Find which contour contains this point
+  let bestIdx = -1;
+  let bestArea = Infinity;
+
+  for (let i = 0; i < S.allContours.contours.length; i++) {
+    const pts = S.allContours.contours[i];
+    if (pointInPolygon(px, py, pts)) {
+      // Pick the smallest contour that contains the tap (most specific)
+      const area = polygonArea(pts);
+      if (area < bestArea) {
         bestArea = area;
         bestIdx = i;
       }
     }
+  }
 
-    if (bestIdx < 0) {
-      contours.delete(); hierarchy.delete();
-      return { success: false, error: "No item detected. Ensure good contrast with surface." };
+  // If no contour contains the point, find the nearest one
+  if (bestIdx < 0) {
+    let bestDist = Infinity;
+    for (let i = 0; i < S.allContours.contours.length; i++) {
+      const pts = S.allContours.contours[i];
+      const dist = minDistToContour(px, py, pts);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
     }
+    // Only accept if reasonably close (within 100 pixels)
+    if (bestDist > 100 * S.ppm) bestIdx = -1;
+  }
 
-    const cnt = contours.get(bestIdx);
+  if (bestIdx < 0) {
+    toast("No object at that point. Tap directly on the item.", true);
+    return;
+  }
 
-    // Rotated bounding box
+  if (navigator.vibrate) navigator.vibrate(50);
+
+  // Now measure the selected contour
+  const selectedPts = S.allContours.contours[bestIdx];
+  const result = measureSelectedContour(S.frozenCanvas, selectedPts);
+
+  // Hide select overlay
+  document.getElementById("select-overlay").classList.remove("on");
+  S.selectMode = false;
+
+  if (result.success) {
+    S.lastResult = result;
+    displayResults(result);
+  } else {
+    toast(result.error, true);
+  }
+}
+
+function pointInPolygon(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y;
+    const xj = pts[j].x, yj = pts[j].y;
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function polygonArea(pts) {
+  let area = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+  }
+  return Math.abs(area / 2);
+}
+
+function minDistToContour(x, y, pts) {
+  let minD = Infinity;
+  for (const p of pts) {
+    const d = Math.sqrt((x-p.x)**2 + (y-p.y)**2);
+    if (d < minD) minD = d;
+  }
+  return minD;
+}
+
+function measureSelectedContour(canvas, selectedPts) {
+  const src = cv.imread(canvas);
+
+  try {
+    // Rebuild cv contour from JS points
+    const cnt = cv.matFromArray(selectedPts.length, 1, cv.CV_32SC2,
+      selectedPts.flatMap(p => [p.x, p.y]));
+
+    const area = cv.contourArea(cnt);
     const rect = cv.minAreaRect(cnt);
     let lenPx = Math.max(rect.size.width, rect.size.height);
     let widPx = Math.min(rect.size.width, rect.size.height);
 
     const lengthMm = lenPx / S.ppm;
     const widthMm = widPx / S.ppm;
-    const areaMm2 = bestArea / (S.ppm * S.ppm);
+    const areaMm2 = area / (S.ppm * S.ppm);
 
-    // Circularity
     const perim = cv.arcLength(cnt, true);
-    const circularity = perim > 0 ? (4 * Math.PI * bestArea) / (perim * perim) : 0;
+    const circularity = perim > 0 ? (4 * Math.PI * area) / (perim * perim) : 0;
 
-    // Color analysis (LAB)
+    // Color analysis
     const lab = new cv.Mat();
     cv.cvtColor(src, lab, cv.COLOR_RGBA2RGB);
     const labConv = new cv.Mat();
     cv.cvtColor(lab, labConv, cv.COLOR_RGB2Lab);
 
-    // Create mask from contour
     const mask = cv.Mat.zeros(src.rows, src.cols, cv.CV_8UC1);
     const drawVec = new cv.MatVector();
     drawVec.push_back(cnt);
     cv.drawContours(mask, drawVec, 0, new cv.Scalar(255), -1);
 
-    // Erode mask slightly
     const ek = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
     cv.erode(mask, mask, ek, new cv.Point(-1,-1), 2);
     ek.delete();
 
-    // Sample color values
     let sumL=0, sumA=0, sumB=0, sumL2=0, count=0;
     let sumR=0, sumG=0, sumBl=0;
 
-    for (let r = 0; r < src.rows; r += 3) {  // Sample every 3rd pixel for speed
+    for (let r = 0; r < src.rows; r += 3) {
       for (let c = 0; c < src.cols; c += 3) {
         if (mask.ucharAt(r, c) > 0) {
           const lVal = labConv.ucharAt(r, c*3) * (100/255);
@@ -1110,7 +1309,6 @@ function measureFromCanvas(canvas) {
           const bVal = labConv.ucharAt(r, c*3+2) - 128;
           sumL += lVal; sumA += aVal; sumB += bVal;
           sumL2 += lVal * lVal;
-          // Also sample RGB for dominant color
           sumR += src.ucharAt(r, c*4);
           sumG += src.ucharAt(r, c*4+1);
           sumBl += src.ucharAt(r, c*4+2);
@@ -1123,34 +1321,21 @@ function measureFromCanvas(canvas) {
     let domHex = "#000000";
 
     if (count > 0) {
-      meanL = sumL/count;
-      meanA = sumA/count;
-      meanB = sumB/count;
-      stdL = Math.sqrt(sumL2/count - meanL*meanL);
+      meanL = sumL/count; meanA = sumA/count; meanB = sumB/count;
+      stdL = Math.sqrt(Math.max(0, sumL2/count - meanL*meanL));
       uniformity = 1 - Math.min(stdL / Math.max(meanL, 1), 1);
-
-      // Bake score (distance from ideal golden-brown in LAB)
       const IDEAL_L=55, IDEAL_A=15, IDEAL_B=35;
       const L_RNG=25, A_RNG=15, B_RNG=20;
-      const dl = ((meanL-IDEAL_L)/L_RNG)**2;
-      const da = ((meanA-IDEAL_A)/A_RNG)**2;
-      const db = ((meanB-IDEAL_B)/B_RNG)**2;
+      const dl=((meanL-IDEAL_L)/L_RNG)**2, da=((meanA-IDEAL_A)/A_RNG)**2, db=((meanB-IDEAL_B)/B_RNG)**2;
       bakeScore = 100 * Math.exp(-(0.5*dl + 0.25*da + 0.25*db));
       bakeScore = Math.max(0, Math.min(100, bakeScore));
-
-      const dr = Math.round(sumR/count);
-      const dg = Math.round(sumG/count);
-      const dbl = Math.round(sumBl/count);
+      const dr=Math.round(sumR/count), dg=Math.round(sumG/count), dbl=Math.round(sumBl/count);
       domHex = "#" + [dr,dg,dbl].map(v => v.toString(16).padStart(2,"0")).join("");
     }
 
     // Draw annotated result
     const annotated = src.clone();
-
-    // Draw contour
     cv.drawContours(annotated, drawVec, 0, new cv.Scalar(255,150,0,255), 3);
-
-    // Draw rotated rect
     const vertices = cv.RotatedRect.points(rect);
     for (let i = 0; i < 4; i++) {
       cv.line(annotated,
@@ -1158,13 +1343,9 @@ function measureFromCanvas(canvas) {
         new cv.Point(vertices[(i+1)%4].x, vertices[(i+1)%4].y),
         new cv.Scalar(255,255,0,255), 2);
     }
-
-    // Labels
-    const cx = Math.round(rect.center.x);
-    const cy = Math.round(rect.center.y);
+    const cx = Math.round(rect.center.x), cy = Math.round(rect.center.y);
     const fs = Math.max(0.7, Math.min(src.cols, src.rows) / 1500);
     const thick = Math.max(2, Math.round(fs * 2));
-
     cv.putText(annotated, `L: ${lengthMm.toFixed(1)} mm`,
       new cv.Point(cx+10, cy-20), cv.FONT_HERSHEY_SIMPLEX, fs,
       new cv.Scalar(255,200,0,255), thick);
@@ -1172,13 +1353,10 @@ function measureFromCanvas(canvas) {
       new cv.Point(cx+10, cy+15), cv.FONT_HERSHEY_SIMPLEX, fs,
       new cv.Scalar(255,200,0,255), thick);
 
-    // Render to results canvas
     const rc = document.getElementById("results-canvas");
-    rc.width = annotated.cols;
-    rc.height = annotated.rows;
+    rc.width = annotated.cols; rc.height = annotated.rows;
     cv.imshow(rc, annotated);
 
-    // Cleanup
     const result = {
       success: true,
       lengthMm: Math.round(lengthMm*10)/10,
@@ -1193,16 +1371,12 @@ function measureFromCanvas(canvas) {
       dominantHex: domHex,
     };
 
-    drawVec.delete(); mask.delete();
-    lab.delete(); labConv.delete();
-    contours.delete(); hierarchy.delete();
-    annotated.delete();
-
+    drawVec.delete(); mask.delete(); cnt.delete();
+    lab.delete(); labConv.delete(); annotated.delete();
     return result;
 
   } finally {
-    src.delete(); gray.delete();
-    blurred.delete(); thresh.delete(); morph.delete();
+    src.delete();
   }
 }
 
