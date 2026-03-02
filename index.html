@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Bakery Vision QC</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════
+   BAKERY VISION QC - Phone-first Production Floor POC
+   Industrial/utilitarian aesthetic, dark, high contrast
+   ═══════════════════════════════════════════════════════ */
+:root {
+  --bg: #0c0e14;
+  --bg-card: #14171f;
+  --bg-raised: #1c2030;
+  --bg-input: #0f1219;
+  --border: #262b3a;
+  --border-active: #3d6aff;
+  --text: #dfe2eb;
+  --text-dim: #7a8099;
+  --text-faint: #454b60;
+  --accent: #3d6aff;
+  --accent-glow: rgba(61,106,255,0.25);
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --radius: 8px;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+html, body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+/* ── Layout Shell ──────────────────────────────────── */
+.shell { display:flex; flex-direction:column; height:100dvh; }
+
+header {
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  display:flex; align-items:center; gap:7px;
+  font-family:'DM Mono', monospace;
+  font-size:13px; font-weight:500;
+  letter-spacing:0.5px;
+  color: var(--text-dim);
+}
+
+.logo .dot { width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+
+.tabs {
+  display:flex; gap:2px;
+  background: var(--bg); border-radius:6px; padding:2px;
+}
+
+.tab {
+  padding: 6px 14px;
+  font-size:12px; font-weight:600;
+  color: var(--text-dim);
+  background:none; border:none;
+  border-radius:4px; cursor:pointer;
+  transition: all 0.15s;
+}
+.tab.on { background:var(--accent); color:#fff; }
+
+main {
+  flex:1; overflow:hidden; position:relative;
+}
+
+.page { display:none; height:100%; overflow-y:auto; }
+.page.on { display:flex; flex-direction:column; }
+
+/* ── Camera Page ───────────────────────────────────── */
+.cam-wrap {
+  position:relative; flex:1; background:#000;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden;
+}
+
+#video { width:100%; height:100%; object-fit:cover; }
+#overlay {
+  position:absolute; inset:0;
+  pointer-events:none;
+}
+#overlay.drawing { pointer-events:auto; touch-action:none; }
+
+.cam-hud {
+  position:absolute; top:10px; left:0; right:0;
+  display:flex; justify-content:center;
+}
+.hud-pill {
+  background:rgba(0,0,0,0.7); backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,0.08);
+  padding:5px 14px; border-radius:20px;
+  font-family:'DM Mono',monospace;
+  font-size:11px; color:var(--text-dim);
+}
+.hud-pill .val { color:var(--green); font-weight:500; }
+.hud-pill.warn .val { color:var(--amber); }
+.hud-pill.none .val { color:var(--red); }
+
+.cam-status {
+  position:absolute; bottom:80px; left:0; right:0;
+  text-align:center; font-size:12px;
+  color:var(--text-dim);
+  text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+  padding:0 20px;
+  pointer-events:none;
+}
+
+.cam-bar {
+  flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  gap:28px; padding:12px 0 20px;
+  background: linear-gradient(transparent, var(--bg) 30%);
+}
+
+.cam-btn {
+  width:44px; height:44px;
+  border-radius:50%; border:none;
+  background:var(--bg-raised);
+  color:var(--text-dim);
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; transition:all 0.12s;
+}
+.cam-btn:active { transform:scale(0.9); }
+.cam-btn svg { width:20px; height:20px; }
+
+.shutter {
+  width:64px; height:64px;
+  border-radius:50%;
+  border:3px solid var(--accent);
+  background:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition: all 0.1s;
+}
+.shutter .inner {
+  width:50px; height:50px;
+  border-radius:50%;
+  background:var(--accent);
+  transition: transform 0.1s;
+}
+.shutter:active .inner { transform:scale(0.85); }
+.shutter.calibrate-mode { border-color: var(--amber); }
+.shutter.calibrate-mode .inner { background: var(--amber); }
+
+/* ── Results Overlay ───────────────────────────────── */
+.results {
+  display:none; flex-direction:column;
+  position:absolute; inset:0;
+  background:var(--bg);
+  z-index:20;
+  overflow-y:auto;
+}
+.results.on { display:flex; }
+
+.results-img {
+  width:100%; aspect-ratio:4/3;
+  object-fit:contain; background:#000;
+  flex-shrink:0;
+}
+
+.results-body { padding:14px; flex:1; }
+
+.metrics {
+  display:grid;
+  grid-template-columns: repeat(3,1fr);
+  gap:8px; margin-bottom:14px;
+}
+
+.metric {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:10px 8px;
+  text-align:center;
+}
+.metric .lbl {
+  font-size:10px; text-transform:uppercase;
+  letter-spacing:0.6px; color:var(--text-faint);
+  font-weight:600; margin-bottom:2px;
+}
+.metric .val {
+  font-family:'DM Mono',monospace;
+  font-size:20px; font-weight:500;
+  color:var(--text);
+}
+.metric .unit {
+  font-size:10px; color:var(--text-dim);
+}
+
+.metric.wide { grid-column: span 2; }
+
+.bake-meter {
+  height:4px; border-radius:2px;
+  background:var(--bg); margin-top:6px;
+  overflow:hidden;
+}
+.bake-meter .fill {
+  height:100%; border-radius:2px;
+  transition: width 0.4s ease;
+}
+
+.swatch {
+  width:28px; height:28px;
+  border-radius:50%; margin:4px auto 0;
+  border:2px solid var(--border);
+}
+
+/* ── Save Form ─────────────────────────────────────── */
+.save-section {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:12px; margin-top:8px;
+}
+
+.save-section h3 {
+  font-size:11px; text-transform:uppercase;
+  letter-spacing:0.6px; color:var(--text-faint);
+  margin-bottom:10px;
+}
+
+.frow { display:flex; gap:8px; margin-bottom:8px; }
+
+.fgroup { flex:1; }
+.fgroup label {
+  display:block; font-size:11px;
+  color:var(--text-dim); margin-bottom:3px;
+}
+.fgroup input, .fgroup select {
+  width:100%; padding:9px 10px;
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:6px; color:var(--text);
+  font-size:14px; font-family:inherit;
+}
+.fgroup input:focus, .fgroup select:focus {
+  outline:none; border-color:var(--border-active);
+}
+
+.btn {
+  width:100%; padding:12px;
+  border:none; border-radius:6px;
+  font-size:14px; font-weight:600;
+  font-family:inherit; cursor:pointer;
+  transition: all 0.12s;
+}
+.btn:active { transform:scale(0.98); }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-ghost { background:none; color:var(--accent); border:1px solid var(--border); margin-top:8px; }
+
+.toast {
+  position:fixed; bottom:80px; left:50%; transform:translateX(-50%);
+  background:var(--green); color:#000;
+  padding:8px 20px; border-radius:20px;
+  font-size:13px; font-weight:600;
+  z-index:100; opacity:0; transition:opacity 0.3s;
+  pointer-events:none;
+}
+.toast.show { opacity:1; }
+.toast.err { background:var(--red); color:#fff; }
+
+/* ── Data Page ─────────────────────────────────────── */
+.data-page { padding:12px; }
+.data-page h2 {
+  font-size:16px; font-weight:600;
+  margin-bottom:4px;
+}
+.data-count {
+  font-size:12px; color:var(--text-dim);
+  margin-bottom:12px;
+  font-family:'DM Mono',monospace;
+}
+
+.tbl-wrap {
+  overflow-x:auto; border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th {
+  background:var(--bg-raised);
+  padding:8px 6px; text-align:left;
+  font-size:10px; text-transform:uppercase;
+  letter-spacing:0.5px; color:var(--text-faint);
+  font-weight:600; white-space:nowrap;
+  border-bottom:1px solid var(--border);
+  position:sticky; top:0;
+}
+td {
+  padding:8px 6px;
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+  font-family:'DM Mono',monospace;
+  font-size:12px;
+}
+tr:last-child td { border-bottom:none; }
+
+.data-actions {
+  display:flex; gap:8px; margin-top:12px;
+}
+.data-actions .btn { flex:1; padding:10px; font-size:13px; }
+
+.empty-msg {
+  text-align:center; padding:40px 20px;
+  color:var(--text-faint); font-size:13px;
+}
+
+/* ── Calibrate Page ────────────────────────────────── */
+.cal-page { padding:16px; }
+.cal-page h2 { font-size:16px; font-weight:600; margin-bottom:12px; }
+
+.cal-card {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:14px; margin-bottom:12px;
+}
+
+.cal-card h3 {
+  font-size:12px; text-transform:uppercase;
+  letter-spacing:0.5px; color:var(--text-dim);
+  margin-bottom:8px;
+}
+
+.cal-card p {
+  font-size:13px; color:var(--text-dim);
+  line-height:1.5; margin-bottom:10px;
+}
+
+.cal-steps {
+  counter-reset:step;
+  list-style:none; padding:0;
+}
+.cal-steps li {
+  counter-increment:step;
+  padding:8px 0 8px 36px;
+  position:relative;
+  font-size:13px; color:var(--text-dim);
+  line-height:1.5;
+}
+.cal-steps li::before {
+  content:counter(step);
+  position:absolute; left:0; top:8px;
+  width:24px; height:24px;
+  background:var(--bg-raised);
+  border:1px solid var(--border);
+  border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-family:'DM Mono',monospace;
+  font-size:11px; font-weight:500;
+  color:var(--accent);
+}
+
+.cal-status {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px;
+  background:var(--bg-raised);
+  border-radius:6px;
+  font-family:'DM Mono',monospace;
+  font-size:13px;
+}
+.cal-dot {
+  width:10px; height:10px; border-radius:50%;
+  flex-shrink:0;
+}
+.cal-dot.green { background:var(--green); box-shadow:0 0 6px rgba(34,197,94,0.4); }
+.cal-dot.amber { background:var(--amber); }
+.cal-dot.red { background:var(--red); }
+
+.ref-input {
+  display:flex; align-items:center; gap:8px;
+  margin-top:8px;
+}
+.ref-input label { font-size:13px; color:var(--text-dim); white-space:nowrap; }
+.ref-input input {
+  width:80px; padding:8px;
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:6px; color:var(--text);
+  font-size:14px; text-align:center;
+  font-family:'DM Mono',monospace;
+}
+.ref-input .unit { font-size:12px; color:var(--text-faint); }
+
+/* ── Loading Screen ────────────────────────────────── */
+.loader {
+  position:fixed; inset:0; z-index:200;
+  background:var(--bg);
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:16px;
+  transition: opacity 0.4s;
+}
+.loader.done { opacity:0; pointer-events:none; }
+
+.loader-ring {
+  width:40px; height:40px;
+  border:3px solid var(--border);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+.loader-text {
+  font-family:'DM Mono',monospace;
+  font-size:12px; color:var(--text-dim);
+}
+
+/* ── Scrollbar ─────────────────────────────────────── */
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<!-- Loading screen while OpenCV loads -->
+<div class="loader" id="loader">
+  <div class="loader-ring"></div>
+  <div class="loader-text" id="loader-text">Loading OpenCV.js...</div>
+</div>
+
+<div class="shell">
+  <header>
+    <div class="logo">
+      <span class="dot"></span>
+      BAKERY QC
+    </div>
+    <div class="tabs">
+      <button class="tab on" data-p="camera">Capture</button>
+      <button class="tab" data-p="data">Data</button>
+      <button class="tab" data-p="cal">Setup</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ═══ CAMERA PAGE ═══ -->
+    <div class="page on" id="p-camera">
+      <div class="cam-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+
+        <div class="cam-hud">
+          <div class="hud-pill none" id="hud-cal">
+            SCALE: <span class="val" id="hud-ppm">NOT SET</span>
+          </div>
+        </div>
+
+        <div class="cam-status" id="cam-status">
+          Tap Setup to calibrate, then capture an item
+        </div>
+
+        <!-- Results overlay -->
+        <div class="results" id="results">
+          <canvas class="results-img" id="results-canvas"></canvas>
+          <div class="results-body">
+            <div class="metrics">
+              <div class="metric">
+                <div class="lbl">Length</div>
+                <div class="val" id="r-len">--</div>
+                <div class="unit">mm</div>
+              </div>
+              <div class="metric">
+                <div class="lbl">Width</div>
+                <div class="val" id="r-wid">--</div>
+                <div class="unit">mm</div>
+              </div>
+              <div class="metric">
+                <div class="lbl">Area</div>
+                <div class="val" id="r-area">--</div>
+                <div class="unit">mm&sup2;</div>
+              </div>
+              <div class="metric">
+                <div class="lbl">Bake</div>
+                <div class="val" id="r-bake">--</div>
+                <div class="unit">/100</div>
+                <div class="bake-meter"><div class="fill" id="r-bake-fill"></div></div>
+              </div>
+              <div class="metric">
+                <div class="lbl">Uniform</div>
+                <div class="val" id="r-unif">--</div>
+                <div class="unit">%</div>
+              </div>
+              <div class="metric">
+                <div class="lbl">Color</div>
+                <div class="swatch" id="r-swatch"></div>
+              </div>
+            </div>
+
+            <div class="save-section">
+              <h3>Log This Measurement</h3>
+              <div class="frow">
+                <div class="fgroup">
+                  <label>Product / SKU</label>
+                  <input type="text" id="s-sku" placeholder="e.g. Blueberry Muffin">
+                </div>
+              </div>
+              <div class="frow">
+                <div class="fgroup">
+                  <label>Height (mm)</label>
+                  <input type="number" id="s-height" step="0.1" placeholder="Manual">
+                </div>
+                <div class="fgroup">
+                  <label>Weight (g)</label>
+                  <input type="number" id="s-weight" step="0.1" placeholder="Manual">
+                </div>
+              </div>
+              <div class="frow">
+                <div class="fgroup">
+                  <label>Line</label>
+                  <select id="s-line">
+                    <option value="">--</option>
+                    <option>CVW-1</option><option>CVW-2</option><option>CVW-3</option>
+                    <option>CVE-1</option><option>CVE-2</option>
+                  </select>
+                </div>
+                <div class="fgroup">
+                  <label>Shift</label>
+                  <select id="s-shift">
+                    <option value="">--</option>
+                    <option>1st</option><option>2nd</option><option>3rd</option>
+                  </select>
+                </div>
+              </div>
+              <div class="frow">
+                <div class="fgroup">
+                  <label>Operator</label>
+                  <input type="text" id="s-operator" placeholder="Name">
+                </div>
+              </div>
+              <button class="btn btn-primary" id="btn-save">Save Measurement</button>
+              <button class="btn btn-ghost" id="btn-retake">Retake</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cam-bar">
+        <button class="cam-btn" id="btn-flip" title="Flip camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
+        <button class="shutter" id="btn-capture">
+          <div class="inner"></div>
+        </button>
+        <button class="cam-btn" id="btn-calmode" title="Calibrate from camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 3H3v7h18V3z"/><path d="M21 14H3v7h18v-7z"/><line x1="12" y1="3" x2="12" y2="10"/><line x1="12" y1="14" x2="12" y2="21"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══ DATA PAGE ═══ -->
+    <div class="page" id="p-data">
+      <div class="data-page">
+        <h2>Measurement Log</h2>
+        <div class="data-count" id="data-count">0 records</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>SKU</th><th>L</th><th>W</th><th>Wt</th><th>Bake</th><th>Line</th>
+              </tr>
+            </thead>
+            <tbody id="data-body"></tbody>
+          </table>
+        </div>
+        <div class="empty-msg" id="data-empty">No measurements captured yet.</div>
+        <div class="data-actions">
+          <button class="btn btn-ghost" id="btn-csv">Export CSV</button>
+          <button class="btn btn-ghost" id="btn-clear" style="border-color:var(--red);color:var(--red);">Clear All</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CALIBRATION / SETUP PAGE ═══ -->
+    <div class="page" id="p-cal">
+      <div class="cal-page">
+        <h2>Setup</h2>
+
+        <div class="cal-card">
+          <h3>Calibration Status</h3>
+          <div class="cal-status" id="cal-status-box">
+            <div class="cal-dot red" id="cal-dot"></div>
+            <span id="cal-status-text">Not calibrated</span>
+          </div>
+        </div>
+
+        <div class="cal-card">
+          <h3>How to Calibrate</h3>
+          <ol class="cal-steps">
+            <li>Place any object with a known dimension next to your bakery item. A credit card (85.6mm wide), a ruler, or a printed square all work.</li>
+            <li>Enter the known dimension below.</li>
+            <li>Go to Capture, tap the ruler icon (bottom right), then tap two points on the reference object spanning that known distance.</li>
+            <li>Scale is set. Now capture items normally.</li>
+          </ol>
+          <div class="ref-input">
+            <label>Reference distance:</label>
+            <input type="number" id="ref-mm" value="85.6" step="0.1">
+            <span class="unit">mm</span>
+          </div>
+          <p style="margin-top:8px; font-size:11px; color:var(--text-faint);">
+            Default 85.6mm = credit card width. Change to match your reference object.
+          </p>
+        </div>
+
+        <div class="cal-card">
+          <h3>Tips for Best Results</h3>
+          <p>Use a white or light surface for maximum contrast. Keep the phone 12 to 18 inches above the item, as straight down as possible. Consistent, even lighting reduces errors significantly.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Hidden canvases for processing -->
+<canvas id="proc-canvas" style="display:none"></canvas>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+
+const S = {
+  ppm: 0,           // pixels per mm (0 = not calibrated)
+  calMode: false,    // calibration drawing mode
+  calPoints: [],     // [{x,y}, {x,y}] for calibration line
+  refMm: 85.6,      // reference object length in mm
+  facing: "environment",
+  stream: null,
+  measurements: [],  // saved records
+  cvReady: false,
+  lastResult: null,
+};
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+
+// Load OpenCV.js
+const cvScript = document.createElement("script");
+cvScript.src = "https://docs.opencv.org/4.9.0/opencv.js";
+cvScript.async = true;
+cvScript.onload = () => {
+  if (typeof cv !== "undefined") {
+    if (cv.getBuildInformation) {
+      onCVReady();
+    } else {
+      cv["onRuntimeInitialized"] = onCVReady;
+    }
+  }
+};
+cvScript.onerror = () => {
+  document.getElementById("loader-text").textContent =
+    "Failed to load OpenCV. Check connection.";
+};
+document.head.appendChild(cvScript);
+
+function onCVReady() {
+  S.cvReady = true;
+  document.getElementById("loader-text").textContent = "Starting camera...";
+  startCamera().then(() => {
+    setTimeout(() => document.getElementById("loader").classList.add("done"), 300);
+  });
+  initUI();
+  loadState();
+}
+
+// ═══════════════════════════════════════════════════════
+// CAMERA
+// ═══════════════════════════════════════════════════════
+
+async function startCamera() {
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+
+  try {
+    S.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: S.facing, width:{ideal:1920}, height:{ideal:1440} },
+      audio: false,
+    });
+    const v = document.getElementById("video");
+    v.srcObject = S.stream;
+    await v.play();
+
+    // Size overlay to match video
+    v.addEventListener("loadedmetadata", sizeOverlay, {once:true});
+    setTimeout(sizeOverlay, 500);
+  } catch(e) {
+    toast("Camera error: " + e.message, true);
+  }
+}
+
+function sizeOverlay() {
+  const v = document.getElementById("video");
+  const c = document.getElementById("overlay");
+  const rect = v.getBoundingClientRect();
+  c.width = rect.width;
+  c.height = rect.height;
+  c.style.width = rect.width + "px";
+  c.style.height = rect.height + "px";
+}
+
+// ═══════════════════════════════════════════════════════
+// UI WIRING
+// ═══════════════════════════════════════════════════════
+
+function initUI() {
+  // Tabs
+  document.querySelectorAll(".tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
+      document.querySelectorAll(".page").forEach(x => x.classList.remove("on"));
+      t.classList.add("on");
+      document.getElementById("p-" + t.dataset.p).classList.add("on");
+      if (t.dataset.p === "data") renderDataTable();
+    });
+  });
+
+  // Flip camera
+  document.getElementById("btn-flip").addEventListener("click", () => {
+    S.facing = S.facing === "environment" ? "user" : "environment";
+    startCamera();
+  });
+
+  // Capture
+  document.getElementById("btn-capture").addEventListener("click", () => {
+    if (S.calMode) return; // don't capture in calibration mode
+    if (S.ppm <= 0) {
+      toast("Calibrate first (Setup tab)", true);
+      return;
+    }
+    captureAndMeasure();
+  });
+
+  // Calibration mode toggle
+  document.getElementById("btn-calmode").addEventListener("click", toggleCalMode);
+
+  // Retake
+  document.getElementById("btn-retake").addEventListener("click", () => {
+    document.getElementById("results").classList.remove("on");
+    S.lastResult = null;
+  });
+
+  // Save
+  document.getElementById("btn-save").addEventListener("click", saveMeasurement);
+
+  // Reference mm input
+  document.getElementById("ref-mm").addEventListener("change", (e) => {
+    S.refMm = parseFloat(e.target.value) || 85.6;
+    saveState();
+  });
+
+  // Calibration overlay touch
+  const ov = document.getElementById("overlay");
+  ov.addEventListener("pointerdown", onCalTouch);
+
+  // Export / Clear
+  document.getElementById("btn-csv").addEventListener("click", exportCSV);
+  document.getElementById("btn-clear").addEventListener("click", () => {
+    if (confirm("Delete all measurement data?")) {
+      S.measurements = [];
+      saveState();
+      renderDataTable();
+      toast("Data cleared");
+    }
+  });
+
+  updateHUD();
+  window.addEventListener("resize", sizeOverlay);
+}
+
+// ═══════════════════════════════════════════════════════
+// CALIBRATION (two-point reference)
+// ═══════════════════════════════════════════════════════
+
+function toggleCalMode() {
+  S.calMode = !S.calMode;
+  S.calPoints = [];
+  const ov = document.getElementById("overlay");
+  const btn = document.getElementById("btn-calmode");
+  const shutter = document.getElementById("btn-capture");
+  const status = document.getElementById("cam-status");
+
+  if (S.calMode) {
+    ov.classList.add("drawing");
+    btn.style.background = "var(--amber)";
+    btn.style.color = "#000";
+    shutter.classList.add("calibrate-mode");
+    status.textContent = "TAP two points on your reference object (" + S.refMm + "mm)";
+    clearOverlay();
+  } else {
+    ov.classList.remove("drawing");
+    btn.style.background = "";
+    btn.style.color = "";
+    shutter.classList.remove("calibrate-mode");
+    status.textContent = S.ppm > 0
+      ? "Calibrated. Capture an item."
+      : "Tap Setup to calibrate.";
+    clearOverlay();
+  }
+}
+
+function onCalTouch(e) {
+  if (!S.calMode) return;
+  e.preventDefault();
+
+  const ov = document.getElementById("overlay");
+  const rect = ov.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  S.calPoints.push({x, y});
+  drawCalPoints();
+
+  if (S.calPoints.length === 2) {
+    // Compute pixels per mm
+    const dx = S.calPoints[1].x - S.calPoints[0].x;
+    const dy = S.calPoints[1].y - S.calPoints[0].y;
+    const distPx = Math.sqrt(dx*dx + dy*dy);
+
+    // Scale factor: overlay coords may differ from video resolution
+    const v = document.getElementById("video");
+    const scaleX = v.videoWidth / rect.width;
+    const scaleY = v.videoHeight / rect.height;
+    const avgScale = (scaleX + scaleY) / 2;
+
+    const distPxActual = distPx * avgScale;
+    S.ppm = distPxActual / S.refMm;
+
+    saveState();
+    updateHUD();
+    toast("Calibrated: " + S.ppm.toFixed(2) + " px/mm");
+
+    setTimeout(() => toggleCalMode(), 600);
+  }
+}
+
+function drawCalPoints() {
+  const ov = document.getElementById("overlay");
+  const ctx = ov.getContext("2d");
+  clearOverlay();
+
+  S.calPoints.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(245,158,11,0.8)";
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Crosshair
+    ctx.strokeStyle = "rgba(245,158,11,0.6)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(p.x-16, p.y); ctx.lineTo(p.x+16, p.y);
+    ctx.moveTo(p.x, p.y-16); ctx.lineTo(p.x, p.y+16);
+    ctx.stroke();
+  });
+
+  if (S.calPoints.length === 2) {
+    ctx.beginPath();
+    ctx.moveTo(S.calPoints[0].x, S.calPoints[0].y);
+    ctx.lineTo(S.calPoints[1].x, S.calPoints[1].y);
+    ctx.strokeStyle = "rgba(245,158,11,0.9)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6,4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Show distance label
+    const mx = (S.calPoints[0].x + S.calPoints[1].x)/2;
+    const my = (S.calPoints[0].y + S.calPoints[1].y)/2 - 14;
+    ctx.font = "600 13px 'DM Mono', monospace";
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.fillText(S.refMm + " mm", mx, my);
+  }
+}
+
+function clearOverlay() {
+  const ov = document.getElementById("overlay");
+  const ctx = ov.getContext("2d");
+  ctx.clearRect(0, 0, ov.width, ov.height);
+}
+
+function updateHUD() {
+  const pill = document.getElementById("hud-cal");
+  const val = document.getElementById("hud-ppm");
+
+  if (S.ppm > 0) {
+    pill.className = "hud-pill";
+    val.textContent = S.ppm.toFixed(1) + " PX/MM";
+  } else {
+    pill.className = "hud-pill none";
+    val.textContent = "NOT SET";
+  }
+
+  // Cal status on setup page
+  const dot = document.getElementById("cal-dot");
+  const txt = document.getElementById("cal-status-text");
+  if (S.ppm > 0) {
+    dot.className = "cal-dot green";
+    txt.textContent = "Calibrated at " + S.ppm.toFixed(2) + " px/mm";
+  } else {
+    dot.className = "cal-dot red";
+    txt.textContent = "Not calibrated";
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// CAPTURE & MEASURE
+// ═══════════════════════════════════════════════════════
+
+function captureAndMeasure() {
+  const v = document.getElementById("video");
+  const pc = document.getElementById("proc-canvas");
+  pc.width = v.videoWidth;
+  pc.height = v.videoHeight;
+
+  const pctx = pc.getContext("2d", {willReadFrequently: true});
+  pctx.drawImage(v, 0, 0);
+
+  document.getElementById("cam-status").textContent = "Processing...";
+
+  // Use requestAnimationFrame to avoid blocking UI
+  requestAnimationFrame(() => {
+    try {
+      const result = measureFromCanvas(pc);
+      if (result.success) {
+        S.lastResult = result;
+        displayResults(result);
+      } else {
+        toast(result.error, true);
+        document.getElementById("cam-status").textContent = result.error;
+      }
+    } catch(e) {
+      toast("Processing error: " + e.message, true);
+      document.getElementById("cam-status").textContent = "Error. Try again.";
+    }
+  });
+}
+
+function measureFromCanvas(canvas) {
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const blurred = new cv.Mat();
+  const thresh = new cv.Mat();
+  const morph = new cv.Mat();
+
+  try {
+    // Grayscale
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    // Blur
+    const ksize = new cv.Size(7, 7);
+    cv.GaussianBlur(gray, blurred, ksize, 0);
+
+    // Adaptive threshold
+    cv.adaptiveThreshold(blurred, thresh, 255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 10);
+
+    // Morphological cleanup
+    const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+    cv.morphologyEx(thresh, morph, cv.MORPH_CLOSE, kernel, new cv.Point(-1,-1), 3);
+    cv.morphologyEx(morph, morph, cv.MORPH_OPEN, kernel, new cv.Point(-1,-1), 2);
+    kernel.delete();
+
+    // Find contours
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(morph, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    // Find largest contour above minimum area
+    const minAreaPx = 500 * (S.ppm * S.ppm); // 500 mm2 minimum
+    let bestIdx = -1;
+    let bestArea = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const area = cv.contourArea(contours.get(i));
+      if (area > minAreaPx && area > bestArea) {
+        // Skip contours that are too large (>80% of image = probably background)
+        if (area > src.rows * src.cols * 0.8) continue;
+        bestArea = area;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx < 0) {
+      contours.delete(); hierarchy.delete();
+      return { success: false, error: "No item detected. Ensure good contrast with surface." };
+    }
+
+    const cnt = contours.get(bestIdx);
+
+    // Rotated bounding box
+    const rect = cv.minAreaRect(cnt);
+    let lenPx = Math.max(rect.size.width, rect.size.height);
+    let widPx = Math.min(rect.size.width, rect.size.height);
+
+    const lengthMm = lenPx / S.ppm;
+    const widthMm = widPx / S.ppm;
+    const areaMm2 = bestArea / (S.ppm * S.ppm);
+
+    // Circularity
+    const perim = cv.arcLength(cnt, true);
+    const circularity = perim > 0 ? (4 * Math.PI * bestArea) / (perim * perim) : 0;
+
+    // Color analysis (LAB)
+    const lab = new cv.Mat();
+    cv.cvtColor(src, lab, cv.COLOR_RGBA2RGB);
+    const labConv = new cv.Mat();
+    cv.cvtColor(lab, labConv, cv.COLOR_RGB2Lab);
+
+    // Create mask from contour
+    const mask = cv.Mat.zeros(src.rows, src.cols, cv.CV_8UC1);
+    const drawVec = new cv.MatVector();
+    drawVec.push_back(cnt);
+    cv.drawContours(mask, drawVec, 0, new cv.Scalar(255), -1);
+
+    // Erode mask slightly
+    const ek = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+    cv.erode(mask, mask, ek, new cv.Point(-1,-1), 2);
+    ek.delete();
+
+    // Sample color values
+    let sumL=0, sumA=0, sumB=0, sumL2=0, count=0;
+    let sumR=0, sumG=0, sumBl=0;
+
+    for (let r = 0; r < src.rows; r += 3) {  // Sample every 3rd pixel for speed
+      for (let c = 0; c < src.cols; c += 3) {
+        if (mask.ucharAt(r, c) > 0) {
+          const lVal = labConv.ucharAt(r, c*3) * (100/255);
+          const aVal = labConv.ucharAt(r, c*3+1) - 128;
+          const bVal = labConv.ucharAt(r, c*3+2) - 128;
+          sumL += lVal; sumA += aVal; sumB += bVal;
+          sumL2 += lVal * lVal;
+          // Also sample RGB for dominant color
+          sumR += src.ucharAt(r, c*4);
+          sumG += src.ucharAt(r, c*4+1);
+          sumBl += src.ucharAt(r, c*4+2);
+          count++;
+        }
+      }
+    }
+
+    let meanL=0, meanA=0, meanB=0, stdL=0, bakeScore=0, uniformity=0;
+    let domHex = "#000000";
+
+    if (count > 0) {
+      meanL = sumL/count;
+      meanA = sumA/count;
+      meanB = sumB/count;
+      stdL = Math.sqrt(sumL2/count - meanL*meanL);
+      uniformity = 1 - Math.min(stdL / Math.max(meanL, 1), 1);
+
+      // Bake score (distance from ideal golden-brown in LAB)
+      const IDEAL_L=55, IDEAL_A=15, IDEAL_B=35;
+      const L_RNG=25, A_RNG=15, B_RNG=20;
+      const dl = ((meanL-IDEAL_L)/L_RNG)**2;
+      const da = ((meanA-IDEAL_A)/A_RNG)**2;
+      const db = ((meanB-IDEAL_B)/B_RNG)**2;
+      bakeScore = 100 * Math.exp(-(0.5*dl + 0.25*da + 0.25*db));
+      bakeScore = Math.max(0, Math.min(100, bakeScore));
+
+      const dr = Math.round(sumR/count);
+      const dg = Math.round(sumG/count);
+      const dbl = Math.round(sumBl/count);
+      domHex = "#" + [dr,dg,dbl].map(v => v.toString(16).padStart(2,"0")).join("");
+    }
+
+    // Draw annotated result
+    const annotated = src.clone();
+
+    // Draw contour
+    cv.drawContours(annotated, drawVec, 0, new cv.Scalar(255,150,0,255), 3);
+
+    // Draw rotated rect
+    const vertices = cv.RotatedRect.points(rect);
+    for (let i = 0; i < 4; i++) {
+      cv.line(annotated,
+        new cv.Point(vertices[i].x, vertices[i].y),
+        new cv.Point(vertices[(i+1)%4].x, vertices[(i+1)%4].y),
+        new cv.Scalar(255,255,0,255), 2);
+    }
+
+    // Labels
+    const cx = Math.round(rect.center.x);
+    const cy = Math.round(rect.center.y);
+    const fs = Math.max(0.7, Math.min(src.cols, src.rows) / 1500);
+    const thick = Math.max(2, Math.round(fs * 2));
+
+    cv.putText(annotated, `L: ${lengthMm.toFixed(1)} mm`,
+      new cv.Point(cx+10, cy-20), cv.FONT_HERSHEY_SIMPLEX, fs,
+      new cv.Scalar(255,200,0,255), thick);
+    cv.putText(annotated, `W: ${widthMm.toFixed(1)} mm`,
+      new cv.Point(cx+10, cy+15), cv.FONT_HERSHEY_SIMPLEX, fs,
+      new cv.Scalar(255,200,0,255), thick);
+
+    // Render to results canvas
+    const rc = document.getElementById("results-canvas");
+    rc.width = annotated.cols;
+    rc.height = annotated.rows;
+    cv.imshow(rc, annotated);
+
+    // Cleanup
+    const result = {
+      success: true,
+      lengthMm: Math.round(lengthMm*10)/10,
+      widthMm: Math.round(widthMm*10)/10,
+      areaMm2: Math.round(areaMm2),
+      circularity: Math.round(circularity*1000)/1000,
+      bakeScore: Math.round(bakeScore*10)/10,
+      uniformity: Math.round(uniformity*1000)/1000,
+      meanL: Math.round(meanL*10)/10,
+      meanA: Math.round(meanA*10)/10,
+      meanB: Math.round(meanB*10)/10,
+      dominantHex: domHex,
+    };
+
+    drawVec.delete(); mask.delete();
+    lab.delete(); labConv.delete();
+    contours.delete(); hierarchy.delete();
+    annotated.delete();
+
+    return result;
+
+  } finally {
+    src.delete(); gray.delete();
+    blurred.delete(); thresh.delete(); morph.delete();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// DISPLAY RESULTS
+// ═══════════════════════════════════════════════════════
+
+function displayResults(r) {
+  document.getElementById("results").classList.add("on");
+  document.getElementById("cam-status").textContent = "Calibrated. Capture an item.";
+
+  document.getElementById("r-len").textContent = r.lengthMm;
+  document.getElementById("r-wid").textContent = r.widthMm;
+  document.getElementById("r-area").textContent = r.areaMm2;
+  document.getElementById("r-bake").textContent = Math.round(r.bakeScore);
+  document.getElementById("r-unif").textContent = Math.round(r.uniformity*100);
+  document.getElementById("r-swatch").style.background = r.dominantHex;
+
+  const fill = document.getElementById("r-bake-fill");
+  const col = r.bakeScore >= 70 ? "var(--green)" : r.bakeScore >= 40 ? "var(--amber)" : "var(--red)";
+  fill.style.width = r.bakeScore + "%";
+  fill.style.background = col;
+}
+
+// ═══════════════════════════════════════════════════════
+// SAVE / DATA
+// ═══════════════════════════════════════════════════════
+
+function saveMeasurement() {
+  if (!S.lastResult) return;
+  const r = S.lastResult;
+
+  const record = {
+    ts: new Date().toISOString(),
+    sku: document.getElementById("s-sku").value || "Unknown",
+    lengthMm: r.lengthMm,
+    widthMm: r.widthMm,
+    heightMm: parseFloat(document.getElementById("s-height").value) || null,
+    weightG: parseFloat(document.getElementById("s-weight").value) || null,
+    areaMm2: r.areaMm2,
+    bakeScore: r.bakeScore,
+    uniformity: r.uniformity,
+    dominantHex: r.dominantHex,
+    line: document.getElementById("s-line").value || "",
+    shift: document.getElementById("s-shift").value || "",
+    operator: document.getElementById("s-operator").value || "",
+  };
+
+  S.measurements.push(record);
+  saveState();
+  toast("Saved (#" + S.measurements.length + ")");
+
+  // Return to camera
+  document.getElementById("results").classList.remove("on");
+  S.lastResult = null;
+}
+
+function renderDataTable() {
+  const body = document.getElementById("data-body");
+  const empty = document.getElementById("data-empty");
+  const count = document.getElementById("data-count");
+
+  count.textContent = S.measurements.length + " records";
+
+  if (S.measurements.length === 0) {
+    body.innerHTML = "";
+    empty.style.display = "block";
+    return;
+  }
+  empty.style.display = "none";
+
+  // Most recent first
+  const rows = [...S.measurements].reverse();
+  body.innerHTML = rows.map(r => {
+    const t = new Date(r.ts);
+    const tStr = (t.getMonth()+1) + "/" + t.getDate() + " " +
+      t.getHours().toString().padStart(2,"0") + ":" +
+      t.getMinutes().toString().padStart(2,"0");
+    return `<tr>
+      <td>${tStr}</td>
+      <td>${r.sku}</td>
+      <td>${r.lengthMm}</td>
+      <td>${r.widthMm}</td>
+      <td>${r.weightG || "-"}</td>
+      <td>${Math.round(r.bakeScore)}</td>
+      <td>${r.line || "-"}</td>
+    </tr>`;
+  }).join("");
+}
+
+function exportCSV() {
+  if (S.measurements.length === 0) { toast("No data to export", true); return; }
+
+  const headers = ["timestamp","sku","length_mm","width_mm","height_mm","weight_g",
+    "area_mm2","bake_score","uniformity","dominant_hex","line","shift","operator"];
+  const rows = S.measurements.map(r => [
+    r.ts, r.sku, r.lengthMm, r.widthMm, r.heightMm||"", r.weightG||"",
+    r.areaMm2, r.bakeScore, r.uniformity, r.dominantHex, r.line, r.shift, r.operator
+  ]);
+
+  let csv = headers.join(",") + "\n";
+  rows.forEach(row => { csv += row.map(v => '"'+v+'"').join(",") + "\n"; });
+
+  const blob = new Blob([csv], {type:"text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "bakery_qc_" + new Date().toISOString().slice(0,10) + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+  toast("CSV downloaded");
+}
+
+// ═══════════════════════════════════════════════════════
+// PERSISTENCE (sessionStorage for POC)
+// ═══════════════════════════════════════════════════════
+
+function saveState() {
+  try {
+    const data = {
+      ppm: S.ppm,
+      refMm: S.refMm,
+      measurements: S.measurements,
+    };
+    sessionStorage.setItem("bqc", JSON.stringify(data));
+  } catch(e) { /* ignore storage errors */ }
+}
+
+function loadState() {
+  try {
+    const raw = sessionStorage.getItem("bqc");
+    if (raw) {
+      const data = JSON.parse(raw);
+      S.ppm = data.ppm || 0;
+      S.refMm = data.refMm || 85.6;
+      S.measurements = data.measurements || [];
+      document.getElementById("ref-mm").value = S.refMm;
+      updateHUD();
+    }
+  } catch(e) { /* ignore */ }
+}
+
+// ═══════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════
+
+function toast(msg, isErr) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast show" + (isErr ? " err" : "");
+  setTimeout(() => el.className = "toast", 2200);
+}
+</script>
+</body>
+</html>
