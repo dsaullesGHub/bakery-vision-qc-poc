@@ -503,7 +503,7 @@ tr:last-child td { border-bottom:none; }
         </div>
 
         <div class="cam-status" id="cam-status">
-          Tap the ruler icon (bottom right) to calibrate first
+          Place marker in frame and capture
         </div>
 
         <!-- Tap-to-select overlay (shown after capture) -->
@@ -604,8 +604,8 @@ tr:last-child td { border-bottom:none; }
         <button class="shutter" id="btn-capture">
           <div class="inner"></div>
         </button>
-        <button class="cam-btn" id="btn-calmode" title="Calibrate from camera">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 3H3v7h18V3z"/><path d="M21 14H3v7h18v-7z"/><line x1="12" y1="3" x2="12" y2="10"/><line x1="12" y1="14" x2="12" y2="21"/></svg>
+        <button class="cam-btn" style="visibility:hidden;">
+          <!-- placeholder for layout balance -->
         </button>
       </div>
     </div>
@@ -642,31 +642,36 @@ tr:last-child td { border-bottom:none; }
           <h3>Calibration Status</h3>
           <div class="cal-status" id="cal-status-box">
             <div class="cal-dot red" id="cal-dot"></div>
-            <span id="cal-status-text">Not calibrated</span>
+            <span id="cal-status-text">Not calibrated yet</span>
           </div>
         </div>
 
         <div class="cal-card">
-          <h3>How to Calibrate</h3>
-          <ol class="cal-steps">
-            <li>Place any object with a known dimension next to your bakery item. A credit card (85.6mm wide), a ruler, or a printed square all work.</li>
-            <li>Enter the known dimension below.</li>
-            <li>Go to Capture, tap the ruler icon (bottom right), then tap two points on the reference object spanning that known distance.</li>
-            <li>Scale is set. Now capture items normally.</li>
-          </ol>
+          <h3>Marker Size</h3>
+          <p>Enter the side length of your printed square marker. The app detects it automatically on every capture and calculates scale from it.</p>
           <div class="ref-input">
-            <label>Reference distance:</label>
-            <input type="number" id="ref-mm" value="85.6" step="0.1">
+            <label>Marker side:</label>
+            <input type="number" id="marker-mm" value="80" step="0.1">
             <span class="unit">mm</span>
           </div>
           <p style="margin-top:8px; font-size:11px; color:var(--text-faint);">
-            Default 85.6mm = credit card width. Change to match your reference object.
+            Measure your printed marker with a ruler to confirm actual size. Print scaling can alter dimensions.
           </p>
         </div>
 
         <div class="cal-card">
+          <h3>How It Works</h3>
+          <ol class="cal-steps">
+            <li>Print a dark square marker and place it on your white background near the item.</li>
+            <li>Set the marker size above to match your printed square.</li>
+            <li>Tap Capture. The marker is auto-detected and scale is computed.</li>
+            <li>Tap the item you want measured. Done.</li>
+          </ol>
+        </div>
+
+        <div class="cal-card">
           <h3>Tips for Best Results</h3>
-          <p>Use a white or light surface for maximum contrast. Keep the phone 12 to 18 inches above the item, as straight down as possible. Consistent, even lighting reduces errors significantly.</p>
+          <p>Use a white or light surface. Keep the phone 12 to 18 inches above, as straight down as possible. Make sure the full marker is visible in frame. Consistent, even lighting reduces errors.</p>
         </div>
       </div>
     </div>
@@ -684,20 +689,17 @@ tr:last-child td { border-bottom:none; }
 // ═══════════════════════════════════════════════════════
 
 const S = {
-  ppm: 0,           // pixels per mm (0 = not calibrated)
-  calMode: false,    // calibration drawing mode
-  calPoints: [],     // [{x,y}, {x,y}] for calibration line
-  refMm: 85.6,      // reference object length in mm
+  ppm: 0,           // pixels per mm (computed per-capture from marker)
+  markerMm: 80,     // printed marker side length in mm (user configurable)
   facing: "environment",
   stream: null,
   measurements: [],  // saved records
   cvReady: false,
   lastResult: null,
   // Tap-to-select state
-  frozenCanvas: null,   // captured frame data
-  selectMode: false,    // waiting for user to tap an item
-  allContours: null,    // detected contours from frozen frame
-  srcMat: null,         // source cv.Mat for measurement after tap
+  frozenCanvas: null,
+  selectMode: false,
+  allContours: null,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -789,18 +791,10 @@ function initUI() {
     startCamera();
   });
 
-  // Capture
+  // Capture (no preconditions, auto-calibrates from marker)
   document.getElementById("btn-capture").addEventListener("click", () => {
-    if (S.calMode) return; // don't capture in calibration mode
-    if (S.ppm <= 0) {
-      toast("Calibrate first (Setup tab)", true);
-      return;
-    }
     captureAndMeasure();
   });
-
-  // Calibration mode toggle
-  document.getElementById("btn-calmode").addEventListener("click", toggleCalMode);
 
   // Retake
   document.getElementById("btn-retake").addEventListener("click", () => {
@@ -814,16 +808,11 @@ function initUI() {
   // Save
   document.getElementById("btn-save").addEventListener("click", saveMeasurement);
 
-  // Reference mm input
-  document.getElementById("ref-mm").addEventListener("change", (e) => {
-    S.refMm = parseFloat(e.target.value) || 85.6;
+  // Marker size input
+  document.getElementById("marker-mm").addEventListener("change", (e) => {
+    S.markerMm = parseFloat(e.target.value) || 80;
     saveState();
   });
-
-  // Calibration overlay touch - use BOTH touchstart and click for coverage
-  const ov = document.getElementById("overlay");
-  ov.addEventListener("touchstart", onCalTouch, {passive: false});
-  ov.addEventListener("click", onCalClick);
 
   // Tap-to-select: user taps on the item they want measured
   const selOv = document.getElementById("select-overlay");
@@ -846,161 +835,112 @@ function initUI() {
 }
 
 // ═══════════════════════════════════════════════════════
-// CALIBRATION (two-point reference)
+// AUTO-DETECT MARKER CALIBRATION
 // ═══════════════════════════════════════════════════════
 
-function toggleCalMode() {
-  S.calMode = !S.calMode;
-  S.calPoints = [];
-  const ov = document.getElementById("overlay");
-  const btn = document.getElementById("btn-calmode");
-  const shutter = document.getElementById("btn-capture");
-  const status = document.getElementById("cam-status");
+function autoDetectMarker(canvas) {
+  // Detects a dark square marker on a lighter background
+  // Returns { ppm, bbox, contourPts } or null
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
 
-  // Always re-size the overlay when entering cal mode
-  sizeOverlay();
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-  const wrap = document.querySelector(".cam-wrap");
+    // Blur and threshold to find dark objects
+    const blurred = new cv.Mat();
+    cv.GaussianBlur(gray, blurred, new cv.Size(5,5), 0);
+    const thresh = new cv.Mat();
+    cv.threshold(blurred, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
 
-  if (S.calMode) {
-    wrap.classList.add("cal-active");
-    ov.classList.add("drawing");
-    btn.style.background = "var(--amber)";
-    btn.style.color = "#000";
-    shutter.classList.add("calibrate-mode");
-    status.textContent = "TAP point 1 on your reference object (" + S.refMm + "mm)";
-    status.style.color = "var(--amber)";
-    status.style.fontWeight = "600";
-    clearOverlay();
-  } else {
-    wrap.classList.remove("cal-active");
-    ov.classList.remove("drawing");
-    btn.style.background = "";
-    btn.style.color = "";
-    shutter.classList.remove("calibrate-mode");
-    status.style.color = "";
-    status.style.fontWeight = "";
-    status.textContent = S.ppm > 0
-      ? "Calibrated. Capture an item."
-      : "Tap ruler icon to calibrate.";
-    clearOverlay();
+    // Clean up
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,3));
+    cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel, new cv.Point(-1,-1), 2);
+    cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel, new cv.Point(-1,-1), 1);
+    kernel.delete();
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const imgArea = src.rows * src.cols;
+    let bestMarker = null;
+    let bestScore = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+
+      // Marker should be between 0.5% and 15% of image area
+      if (area < imgArea * 0.005 || area > imgArea * 0.15) continue;
+
+      // Approximate to polygon
+      const approx = new cv.Mat();
+      const peri = cv.arcLength(cnt, true);
+      cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
+
+      // Must be a quadrilateral
+      if (approx.rows === 4) {
+        // Check if convex
+        if (!cv.isContourConvex(approx)) { approx.delete(); continue; }
+
+        // Get bounding rect and check squareness
+        const rect = cv.boundingRect(cnt);
+        const aspectRatio = rect.width / rect.height;
+
+        // Should be approximately square (0.7 to 1.4)
+        if (aspectRatio >= 0.7 && aspectRatio <= 1.4) {
+          // Score: prefer more square, and larger
+          const squareness = 1 - Math.abs(1 - aspectRatio);
+          // Also check fill ratio (should be high for a square)
+          const fillRatio = area / (rect.width * rect.height);
+          const score = squareness * fillRatio * Math.sqrt(area);
+
+          if (score > bestScore) {
+            bestScore = score;
+
+            // Extract corner points
+            const pts = [];
+            for (let j = 0; j < 4; j++) {
+              pts.push({ x: approx.intAt(j, 0), y: approx.intAt(j, 1) });
+            }
+
+            // Compute average side length in pixels
+            let totalSide = 0;
+            for (let j = 0; j < 4; j++) {
+              const p1 = pts[j];
+              const p2 = pts[(j+1) % 4];
+              totalSide += Math.sqrt((p2.x-p1.x)**2 + (p2.y-p1.y)**2);
+            }
+            const avgSidePx = totalSide / 4;
+            const ppm = avgSidePx / S.markerMm;
+
+            bestMarker = {
+              ppm: ppm,
+              avgSidePx: avgSidePx,
+              bbox: rect,
+              corners: pts,
+              contourPts: (() => {
+                const p = [];
+                for (let j = 0; j < cnt.rows; j++) {
+                  p.push({ x: cnt.intAt(j, 0), y: cnt.intAt(j, 1) });
+                }
+                return p;
+              })(),
+            };
+          }
+        }
+      }
+      approx.delete();
+    }
+
+    contours.delete(); hierarchy.delete();
+    blurred.delete(); thresh.delete();
+    return bestMarker;
+
+  } finally {
+    src.delete(); gray.delete();
   }
-}
-
-function onCalTouch(e) {
-  if (!S.calMode) return;
-  e.preventDefault();
-  e.stopPropagation();
-
-  const touch = e.touches[0];
-  const ov = document.getElementById("overlay");
-  const rect = ov.getBoundingClientRect();
-  const x = touch.clientX - rect.left;
-  const y = touch.clientY - rect.top;
-
-  registerCalPoint(x, y, rect);
-}
-
-function onCalClick(e) {
-  if (!S.calMode) return;
-  e.preventDefault();
-  e.stopPropagation();
-
-  // Skip if this was already handled by touchstart (prevent double-fire)
-  if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
-
-  const ov = document.getElementById("overlay");
-  const rect = ov.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-
-  registerCalPoint(x, y, rect);
-}
-
-function registerCalPoint(x, y, rect) {
-  S.calPoints.push({x, y});
-  drawCalPoints();
-
-  // Vibration feedback if available
-  if (navigator.vibrate) navigator.vibrate(30);
-
-  const status = document.getElementById("cam-status");
-  if (S.calPoints.length === 1) {
-    status.textContent = "Point 1 set. Now tap the OTHER end of the reference.";
-  }
-
-  if (S.calPoints.length === 2) {
-    // Compute pixels per mm
-    const dx = S.calPoints[1].x - S.calPoints[0].x;
-    const dy = S.calPoints[1].y - S.calPoints[0].y;
-    const distPx = Math.sqrt(dx*dx + dy*dy);
-
-    // Scale factor: overlay display size vs video native resolution
-    const v = document.getElementById("video");
-    const ov = document.getElementById("overlay");
-    const ovRect = ov.getBoundingClientRect();
-    const scaleX = v.videoWidth / ovRect.width;
-    const scaleY = v.videoHeight / ovRect.height;
-    const avgScale = (scaleX + scaleY) / 2;
-
-    const distPxActual = distPx * avgScale;
-    S.ppm = distPxActual / S.refMm;
-
-    saveState();
-    updateHUD();
-    toast("Calibrated: " + S.ppm.toFixed(2) + " px/mm");
-
-    setTimeout(() => toggleCalMode(), 600);
-  }
-}
-
-function drawCalPoints() {
-  const ov = document.getElementById("overlay");
-  const ctx = ov.getContext("2d");
-  clearOverlay();
-
-  S.calPoints.forEach((p, i) => {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(245,158,11,0.8)";
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Crosshair
-    ctx.strokeStyle = "rgba(245,158,11,0.6)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(p.x-16, p.y); ctx.lineTo(p.x+16, p.y);
-    ctx.moveTo(p.x, p.y-16); ctx.lineTo(p.x, p.y+16);
-    ctx.stroke();
-  });
-
-  if (S.calPoints.length === 2) {
-    ctx.beginPath();
-    ctx.moveTo(S.calPoints[0].x, S.calPoints[0].y);
-    ctx.lineTo(S.calPoints[1].x, S.calPoints[1].y);
-    ctx.strokeStyle = "rgba(245,158,11,0.9)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6,4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Show distance label
-    const mx = (S.calPoints[0].x + S.calPoints[1].x)/2;
-    const my = (S.calPoints[0].y + S.calPoints[1].y)/2 - 14;
-    ctx.font = "600 13px 'DM Mono', monospace";
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.fillText(S.refMm + " mm", mx, my);
-  }
-}
-
-function clearOverlay() {
-  const ov = document.getElementById("overlay");
-  const ctx = ov.getContext("2d");
-  ctx.clearRect(0, 0, ov.width, ov.height);
 }
 
 function updateHUD() {
@@ -1012,23 +952,22 @@ function updateHUD() {
     val.textContent = S.ppm.toFixed(1) + " PX/MM";
   } else {
     pill.className = "hud-pill none";
-    val.textContent = "NOT SET";
+    val.textContent = "AUTO";
   }
 
-  // Cal status on setup page
   const dot = document.getElementById("cal-dot");
   const txt = document.getElementById("cal-status-text");
   if (S.ppm > 0) {
     dot.className = "cal-dot green";
-    txt.textContent = "Calibrated at " + S.ppm.toFixed(2) + " px/mm";
+    txt.textContent = "Last capture: " + S.ppm.toFixed(2) + " px/mm";
   } else {
-    dot.className = "cal-dot red";
-    txt.textContent = "Not calibrated";
+    dot.className = "cal-dot amber";
+    txt.textContent = "Will auto-calibrate on next capture";
   }
 }
 
 // ═══════════════════════════════════════════════════════
-// CAPTURE & MEASURE (tap-to-select flow)
+// CAPTURE & MEASURE (auto-cal + tap-to-select)
 // ═══════════════════════════════════════════════════════
 
 function captureAndMeasure() {
@@ -1040,28 +979,49 @@ function captureAndMeasure() {
   const pctx = pc.getContext("2d", {willReadFrequently: true});
   pctx.drawImage(v, 0, 0);
 
-  // Show frozen frame in select overlay
+  // Step 1: Auto-detect marker
+  const marker = autoDetectMarker(pc);
+  if (!marker) {
+    toast("Marker not found. Ensure the dark square is fully visible.", true);
+    return;
+  }
+
+  S.ppm = marker.ppm;
+  updateHUD();
+
+  // Step 2: Find item contours (excluding marker region)
+  const contourData = findAllContours(pc, marker.bbox);
+  if (!contourData || contourData.contours.length === 0) {
+    toast("No items detected. Ensure item contrasts with background.", true);
+    return;
+  }
+
+  // Step 3: Show frozen frame with annotations
   const fc = document.getElementById("frozen-canvas");
   fc.width = v.videoWidth;
   fc.height = v.videoHeight;
   const fctx = fc.getContext("2d");
   fctx.drawImage(pc, 0, 0);
 
-  // Find all contours FIRST
-  const contourData = findAllContours(pc);
-  if (!contourData) {
-    toast("No objects detected. Try better lighting.", true);
-    return;
-  }
+  // Draw marker outline in green
+  const mc = marker.corners;
+  fctx.beginPath();
+  fctx.moveTo(mc[0].x, mc[0].y);
+  for (let i = 1; i < mc.length; i++) fctx.lineTo(mc[i].x, mc[i].y);
+  fctx.closePath();
+  fctx.strokeStyle = "rgba(34,197,94,0.8)";
+  fctx.lineWidth = 3;
+  fctx.stroke();
+  // Label
+  fctx.font = "bold 16px 'DM Mono', monospace";
+  fctx.fillStyle = "rgba(34,197,94,0.9)";
+  fctx.fillText("MARKER", marker.bbox.x, marker.bbox.y - 8);
 
-  // Draw all detected contour outlines on frozen frame so user can see them
+  // Draw item contours
   const outlineColors = [
-    "rgba(74,158,255,0.5)", "rgba(34,197,94,0.5)", "rgba(251,191,36,0.5)",
-    "rgba(239,68,68,0.5)", "rgba(168,85,247,0.5)"
+    "rgba(74,158,255,0.7)", "rgba(251,191,36,0.7)",
+    "rgba(239,68,68,0.7)", "rgba(168,85,247,0.7)"
   ];
-  const scaleX = fc.width / v.videoWidth;  // should be 1:1
-  const scaleY = fc.height / v.videoHeight;
-
   for (let i = 0; i < contourData.contours.length; i++) {
     const pts = contourData.contours[i];
     fctx.beginPath();
@@ -1069,77 +1029,148 @@ function captureAndMeasure() {
     fctx.lineWidth = 4;
     if (pts.length > 0) {
       fctx.moveTo(pts[0].x, pts[0].y);
-      for (let j = 1; j < pts.length; j++) {
-        fctx.lineTo(pts[j].x, pts[j].y);
-      }
+      for (let j = 1; j < pts.length; j++) fctx.lineTo(pts[j].x, pts[j].y);
       fctx.closePath();
       fctx.stroke();
     }
   }
 
-  // Store state for when user taps
+  // Store state
   S.selectMode = true;
   S.frozenCanvas = pc;
   S.allContours = contourData;
 
-  // Show the select overlay
   document.getElementById("select-overlay").classList.add("on");
-
   if (navigator.vibrate) navigator.vibrate(30);
+  toast("Scale: " + S.ppm.toFixed(1) + " px/mm. Tap your item.");
 }
 
-function findAllContours(canvas) {
+function findAllContours(canvas, markerBbox) {
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  const thresh = new cv.Mat();
-  const morph = new cv.Mat();
+  const hsv = new cv.Mat();
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    const ksize = new cv.Size(7, 7);
-    cv.GaussianBlur(gray, blurred, ksize, 0);
-    cv.adaptiveThreshold(blurred, thresh, 255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 10);
+    cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
+    const hsvConv = new cv.Mat();
+    cv.cvtColor(hsv, hsvConv, cv.COLOR_RGB2HSV);
 
-    const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
-    cv.morphologyEx(thresh, morph, cv.MORPH_CLOSE, kernel, new cv.Point(-1,-1), 3);
-    cv.morphologyEx(morph, morph, cv.MORPH_OPEN, kernel, new cv.Point(-1,-1), 2);
-    kernel.delete();
+    // Use pixel-based area thresholds now that we have ppm from marker
+    const minAreaPx = S.ppm > 0 ? 200 * (S.ppm * S.ppm) : (src.rows * src.cols * 0.002);
+    const maxArea = src.rows * src.cols * 0.75;
+    let bestContours = [];
 
-    const contours = new cv.MatVector();
-    const hierarchy = new cv.Mat();
-    cv.findContours(morph, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    // Expand marker bbox for exclusion (add padding)
+    const pad = markerBbox ? Math.max(markerBbox.width, markerBbox.height) * 0.2 : 0;
+    const exBbox = markerBbox ? {
+      x: markerBbox.x - pad,
+      y: markerBbox.y - pad,
+      width: markerBbox.width + pad*2,
+      height: markerBbox.height + pad*2
+    } : null;
 
-    const minAreaPx = 200 * (S.ppm * S.ppm); // lower threshold to catch more objects
-    const maxArea = src.rows * src.cols * 0.8;
-    const results = [];
-
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const area = cv.contourArea(cnt);
-      if (area > minAreaPx && area < maxArea) {
-        // Extract contour points as JS array
-        const pts = [];
-        for (let j = 0; j < cnt.rows; j++) {
-          pts.push({ x: cnt.intAt(j, 0), y: cnt.intAt(j, 1) });
-        }
-        results.push(pts);
-      }
+    function filterMarker(contourList) {
+      if (!exBbox) return contourList;
+      return contourList.filter(pts => {
+        // Get centroid of contour
+        let cx = 0, cy = 0;
+        for (const p of pts) { cx += p.x; cy += p.y; }
+        cx /= pts.length; cy /= pts.length;
+        // Exclude if centroid falls inside expanded marker bbox
+        return !(cx >= exBbox.x && cx <= exBbox.x + exBbox.width &&
+                 cy >= exBbox.y && cy <= exBbox.y + exBbox.height);
+      });
     }
 
-    contours.delete(); hierarchy.delete();
+    // Strategy 1: Saturation channel (great for colored items on white/dark)
+    const channels = new cv.MatVector();
+    cv.split(hsvConv, channels);
+    const sat = channels.get(1);
+    const satThresh = new cv.Mat();
+    cv.threshold(sat, satThresh, 40, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    const k1 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7,7));
+    cv.morphologyEx(satThresh, satThresh, cv.MORPH_CLOSE, k1, new cv.Point(-1,-1), 3);
+    cv.morphologyEx(satThresh, satThresh, cv.MORPH_OPEN, k1, new cv.Point(-1,-1), 2);
+    k1.delete();
+    bestContours = filterMarker(extractContours(satThresh, minAreaPx, maxArea));
+    satThresh.delete();
 
-    if (results.length === 0) {
-      return null;
+    // Strategy 2: Otsu on grayscale (if saturation didn't find enough)
+    if (bestContours.length < 1) {
+      const otsu = new cv.Mat();
+      cv.GaussianBlur(gray, otsu, new cv.Size(7,7), 0);
+      cv.threshold(otsu, otsu, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+      const k2 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+      cv.morphologyEx(otsu, otsu, cv.MORPH_CLOSE, k2, new cv.Point(-1,-1), 3);
+      cv.morphologyEx(otsu, otsu, cv.MORPH_OPEN, k2, new cv.Point(-1,-1), 2);
+      k2.delete();
+      bestContours = filterMarker(extractContours(otsu, minAreaPx, maxArea));
+      otsu.delete();
     }
 
-    return { contours: results };
+    // Strategy 3: Adaptive threshold (original, fallback)
+    if (bestContours.length < 1) {
+      const blurred = new cv.Mat();
+      const adapt = new cv.Mat();
+      cv.GaussianBlur(gray, blurred, new cv.Size(7,7), 0);
+      cv.adaptiveThreshold(blurred, adapt, 255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 10);
+      const k3 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+      cv.morphologyEx(adapt, adapt, cv.MORPH_CLOSE, k3, new cv.Point(-1,-1), 3);
+      cv.morphologyEx(adapt, adapt, cv.MORPH_OPEN, k3, new cv.Point(-1,-1), 2);
+      k3.delete();
+      bestContours = filterMarker(extractContours(adapt, minAreaPx, maxArea));
+      blurred.delete(); adapt.delete();
+    }
+
+    // Strategy 4: Canny edge detection (last resort)
+    if (bestContours.length < 1) {
+      const edges = new cv.Mat();
+      const blurred2 = new cv.Mat();
+      cv.GaussianBlur(gray, blurred2, new cv.Size(5,5), 0);
+      cv.Canny(blurred2, edges, 30, 100);
+      const k4 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7,7));
+      cv.dilate(edges, edges, k4, new cv.Point(-1,-1), 3);
+      cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k4, new cv.Point(-1,-1), 4);
+      k4.delete();
+      bestContours = filterMarker(extractContours(edges, minAreaPx, maxArea));
+      edges.delete(); blurred2.delete();
+    }
+
+    channels.get(0).delete(); sat.delete(); channels.get(2).delete();
+    channels.delete(); hsvConv.delete();
+
+    if (bestContours.length === 0) return null;
+    return { contours: bestContours };
 
   } finally {
-    src.delete(); gray.delete();
-    blurred.delete(); thresh.delete(); morph.delete();
+    src.delete(); gray.delete(); hsv.delete();
   }
+}
+
+function extractContours(binaryMat, minArea, maxArea) {
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  cv.findContours(binaryMat, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  const results = [];
+  for (let i = 0; i < contours.size(); i++) {
+    const cnt = contours.get(i);
+    const area = cv.contourArea(cnt);
+    if (area > minArea && area < maxArea) {
+      const pts = [];
+      for (let j = 0; j < cnt.rows; j++) {
+        pts.push({ x: cnt.intAt(j, 0), y: cnt.intAt(j, 1) });
+      }
+      results.push(pts);
+    }
+  }
+  contours.delete(); hierarchy.delete();
+
+  // Sort by area descending (largest first)
+  results.sort((a, b) => polygonArea(b) - polygonArea(a));
+  return results;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1497,8 +1528,7 @@ function exportCSV() {
 function saveState() {
   try {
     const data = {
-      ppm: S.ppm,
-      refMm: S.refMm,
+      markerMm: S.markerMm,
       measurements: S.measurements,
     };
     sessionStorage.setItem("bqc", JSON.stringify(data));
@@ -1510,10 +1540,9 @@ function loadState() {
     const raw = sessionStorage.getItem("bqc");
     if (raw) {
       const data = JSON.parse(raw);
-      S.ppm = data.ppm || 0;
-      S.refMm = data.refMm || 85.6;
+      S.markerMm = data.markerMm || 80;
       S.measurements = data.measurements || [];
-      document.getElementById("ref-mm").value = S.refMm;
+      document.getElementById("marker-mm").value = S.markerMm;
       updateHUD();
     }
   } catch(e) { /* ignore */ }
